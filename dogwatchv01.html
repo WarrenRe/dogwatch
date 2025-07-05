@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Futuristic Face Detection AR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+
+        body {
+            font-family: 'Orbitron', sans-serif;
+            background-color: #000;
+            color: #00e5e5; /* Teal color */
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        #video, #canvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scaleX(-1); /* Flip video horizontally */
+            min-width: 100%;
+            min-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: cover;
+        }
+
+        #video { z-index: -1; }
+        #canvas { z-index: 10; }
+
+        .hud-element {
+            border: 1px solid rgba(0, 229, 229, 0.3);
+            background: rgba(0, 20, 20, 0.1);
+            backdrop-filter: blur(2px);
+            box-shadow: 0 0 5px rgba(0, 229, 229, 0.2), 0 0 10px rgba(0, 229, 229, 0.2) inset;
+            position: relative;
+        }
+
+        .hud-text { text-shadow: 0 0 5px rgba(0, 229, 229, 0.7); }
+        .title-text {
+            position: relative;
+            color: #00e5e5;
+            text-shadow: 0 0 8px rgba(0, 229, 229, 1);
+            line-height: 1;
+        }
+        .title-text::before {
+            content: attr(data-text);
+            position: absolute;
+            left: 1px;
+            top: 1px;
+            color: #ff0000; /* Red shadow */
+            z-index: -1;
+            text-shadow: none;
+            opacity: 0.8;
+            transform: rotate(0.5deg);
+        }
+
+        .corner-bracket {
+            position: absolute;
+            width: 15px;
+            height: 15px;
+            border-color: #00e5e5;
+            border-style: solid;
+        }
+        .corner-bracket.top-left { top: -1px; left: -1px; border-width: 2px 0 0 2px; }
+        .corner-bracket.top-right { top: -1px; right: -1px; border-width: 2px 2px 0 0; }
+        .corner-bracket.bottom-left { bottom: -1px; left: -1px; border-width: 0 0 2px 2px; }
+        .corner-bracket.bottom-right { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; }
+
+        #loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 100; display: flex;
+            justify-content: center; align-items: center; flex-direction: column;
+            transition: opacity 0.5s ease-out;
+        }
+        
+        .spinner {
+            border: 4px solid rgba(0, 229, 229, 0.2);
+            border-left-color: #00e5e5;
+            border-radius: 50%; width: 50px; height: 50px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .glyph-container {
+            padding: 0.5rem;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+        }
+        .glyph-container.pressed svg { color: #ff0000; text-shadow: 0 0 8px #ff0000; }
+
+        @keyframes blink-effect {
+            50% { opacity: 0.6; text-shadow: 0 0 8px rgba(255, 0, 0, 0.8); }
+        }
+        .blinking-text { animation: blink-effect 1.5s linear infinite; }
+
+        @keyframes exploit-pulse {
+            50% { color: #ff3333; text-shadow: 0 0 12px #00e5e5; }
+        }
+        .pulsating-exploit {
+            color: #ff0000;
+            animation: exploit-pulse 1.5s linear infinite;
+        }
+
+        @keyframes skiptrace-pulse {
+            50% { color: #33ffff; text-shadow: 0 0 12px #ff0000; }
+        }
+        .pulsating-skiptrace {
+            color: #00e5e5;
+            animation: skiptrace-pulse 1.5s linear infinite;
+        }
+
+        .ripple {
+            position: absolute;
+            border-radius: 50%;
+            background-color: rgba(0, 229, 229, 0.7);
+            transform: scale(0);
+            animation: ripple-effect 0.6s ease-out;
+            pointer-events: none;
+        }
+        @keyframes ripple-effect {
+            to { transform: scale(4); opacity: 0; }
+        }
+    </style>
+</head>
+<body class="bg-black">
+
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <p id="loading-text" class="mt-4 hud-text">Initializing Neural Interface...</p>
+    </div>
+
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas"></canvas>
+
+    <div id="ui-overlay" class="absolute top-0 left-0 w-full h-full pointer-events-none opacity-0 transition-opacity duration-1000">
+        
+        <!-- Top UI Container -->
+        <div class="absolute top-4 left-4 right-4 flex justify-between items-start">
+            <!-- Left Column: Status and Title -->
+            <div class="flex-grow">
+                <!-- System Status Box -->
+                <div class="p-1 hud-element min-w-0 bg-gray-900/70 backdrop-blur-sm mb-2">
+                    <div class="corner-bracket top-left"></div><div class="corner-bracket top-right"></div>
+                    <div class="corner-bracket bottom-left"></div><div class="corner-bracket bottom-right"></div>
+                    <h3 class="hud-text text-[10px] leading-tight truncate">SYSTEM STATUS</h3>
+                    <p class="text-[9px] mt-1 hud-text truncate">CORE_TEMP: 42.5C</p>
+                    <p class="text-[9px] hud-text truncate">API_LINK: ACTIVE</p>
+                    <p class="text-[9px] hud-text truncate">NET_LATENCY: 12ms</p>
+                    <p class="text-[9px] hud-text truncate">TRACKING_LOCK: <span id="tracking-status" class="text-red-500">INACTIVE</span></p>
+                </div>
+                <!-- Title -->
+                <div>
+                    <div class="title-text text-lg" data-text="NEUROGRID">NEUROGRID</div>
+                    <div class="title-text text-xs" data-text="v1.0">v1.0</div>
+                </div>
+            </div>
+            <!-- Right Glyph Bar -->
+            <div id="right-glyph-bar" class="flex flex-col space-y-2 pl-4 pointer-events-auto">
+                <!-- Glyphs are added here by JS -->
+            </div>
+        </div>
+        
+        <!-- Bottom UI Container -->
+        <div id="bottom-ui-container" class="fixed bottom-0 left-0 w-full p-4 bg-gray-900/70 backdrop-blur-sm pointer-events-auto opacity-0 translate-y-4 transition-all ease-in-out duration-500">
+            <!-- Action Buttons -->
+            <div class="flex justify-between items-center mb-2">
+                <!-- Trigger Exploit Button -->
+                <div id="trigger-exploit-btn" class="hud-element p-2 text-left cursor-pointer w-1/3">
+                    <p class="hud-text font-bold pulsating-exploit">TRIGGER EXPLOIT</p>
+                </div>
+                <!-- Skip Trace Button -->
+                <div id="skip-trace-btn" class="hud-element p-2 text-right cursor-pointer w-1/3">
+                    <p class="hud-text font-bold pulsating-skiptrace">SKIP TRACE</p>
+                </div>
+            </div>
+            <!-- Target Analysis Box -->
+            <div class="p-1 hud-element min-w-0">
+                <div class="corner-bracket top-left"></div><div class="corner-bracket top-right"></div>
+                <div class="corner-bracket bottom-left"></div><div class="corner-bracket bottom-right"></div>
+                <h3 class="hud-text text-xs font-bold blinking-text truncate">TARGET ANALYSIS</h3>
+                <p class="text-[9px] mt-1 hud-text truncate"><b class="font-bold">VOCATION:</b> <span id="vocation-text"></span></p>
+                <p class="text-[9px] hud-text truncate"><b class="font-bold">ASSET_INDEX:</b> <span id="asset-text"></span></p>
+                <p class="text-[9px] hud-text truncate"><b class="font-bold">DATA_BIAS:</b> <span id="bias-text"></span></p>
+                <p class="text-[9px] hud-text truncate"><b class="font-bold">VICE_PROFILE:</b> <span id="vice-text"></span></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingText = document.getElementById('loading-text');
+        const uiOverlay = document.getElementById('ui-overlay');
+        const trackingStatus = document.getElementById('tracking-status');
+        const rightGlyphBar = document.getElementById('right-glyph-bar');
+        const bottomUiContainer = document.getElementById('bottom-ui-container');
+        const triggerExploitBtn = document.getElementById('trigger-exploit-btn');
+        const skipTraceBtn = document.getElementById('skip-trace-btn');
+
+        let latestDetections = [];
+        let lastTrackingState = 'INACTIVE';
+
+        const vocationsList = "Freelance Developer, Drone Operator, Data Broker, Synthwave DJ, Biohacker, Memory Surgeon, Cloud Forensics Analyst, Neural Interface Specialist, Street Medic, Urban Cartographer, Deepweb Courier, AR Technician, Reality Architect, Cybernetic Prosthetist, Black Market Coder, AI Whisperer, Mesh Network Installer, Social Credit Auditor, Sleep Cycle Optimizer, InfoSec Consultant, Digital Janitor, Crypto Miner, Reputation Engineer, Emotion Analyst, Surveillance Coordinator, Life Streamer, Algorithmic Influencer, Virtual Real Estate Agent, Mood Curator, Psychographic Profiler, Hacktivist, Quantum Systems Repair, Firmware Blacksmith, Neural Ad Coder, Food Ration Controller, Drone Traffic Moderator, Urban Horticulturist, Synthetic Pet Groomer, Nano-Medicine Technician, Adblock Negotiator, Firewall Technician, Viral Content Auditor, Grey Market Vendor, Emotion Synth Composer, Industrial Cleaner, Corporate Spy, Simulated Combat Coach, Autonomous Fleet Dispatcher, Cybernetic Tattooist, Holographic Ad Installer, Digital Doula, Encryption Specialist, Gene Therapy Advisor, Auto-Court Mediator, System Breach Containment, Nocturnal Courier, Identity Fabricator, Bio-Printer Operator, Personal Firewall Admin, Crypto Compliance Officer, Quantum Ethicist, Ghostwriter Bot Tuner, Emotional Labor Rep, Neural UX Designer, Brainwave Archivist, Disinformation Strategist, Drone Racing Promoter, Deepfake Moderator, Virtual Companion Developer, Bio-Feedback Therapist, XR Set Designer, Cyber Choir Director, Executive Data Assistant, Glitch Repair Engineer, Corporate Courier, Cybernetics Installer, Technoforest Guide, Dream Sequence Consultant, Predictive Analytics Researcher, Remote Reality Host, Cognitive Load Manager, Digital Soul Broker, Peer-to-Peer Courier, Neurotrend Analyst, Surveillance Drone Mechanic, Discreet Extraction Specialist, Sensory Architect, Quantum Logistics Driver, Filter Technician, Attention Economy Analyst, Espionage Debriefer, Companion AI Programmer, Hardware Salvager, Datastream Manager, Locational Deception Consultant, Social Echo Analyst, Reality Break Facilitator, Crypto Bailiff, Nanodust Handler, Underground Med-Tech, Memory Market Analyst, Holonet Repair Agent, Counter-AI Trainer, Emotion Regulation Consultant, Supply Chain Cipherer, Mesh Whisperer, Deep Sea Data Diver, Emotional Drain Monitor, Virtual Idol Manager, Proxy Tester, Subnet Walker, Cognitive Freelance Contractor, Spoofing Consultant, Shadow Account Manager, Neural Load Tester, Technowaste Reclaimer, AR Graffiti Curator, UX Disruption Specialist, Loyalty Score Auditor, App Deathmatch Commentator, Network Silence Coordinator, Biometric Replicator, Counterfeit Detection Analyst, Grid Edge Maintainer, Illegal Clone Support, Quantum Code Synthesist, Urban Flood Monitor, Sleep Regime Technician, AI Karma Tracker, Dust City Courier, Noise Pollution Mapper, Societal Behavior Forecaster, Panic Response Strategist, Hidden Server Host, Desensitization Expert, Industrial Psychochemist, Surveillance Leak Fixer, Gamified Incentive Designer, Metaverse Cartographer, Corporate Loyalty Trainer, Neural Stim Therapist, Freelance Synth-Pop Producer, Data Death Cleanup Crew, Mind Wipe Operator, Encrypted Storage Handler, Identity Recovery Liaison, Sensory Input Tuner, Anti-Viral Bot Tamer, Sentience Debate Moderator, Fear Index Analyst, Hyperloop Station Guard, Light Pollution Auditor, Tactical Network Mapper, Augmented Urban Planner, Predictive Policing Coder, Sleep Disruption Specialist, Digital Will Executor, Augmented Pet Trainer, Emotional Forecast Broadcaster, Sleep Ad Targeter, Smog Net Maintainer, Empathy Score Analyst, Media Delay Engineer, Personal Algorithm Coach, Nanotech Mascot Handler, Temporal Data Analyst, Surveillance Infrastructure Planner, Neural Addiction Therapist, Thoughtloop Debugger, Augment Rights Advisor, Consciousness Transfer Consultant, AI Ethics Enforcement, Drone Conflict Negotiator, Corporate Crisis Designer, Stress Decay Analyst, Subliminal Content Reviewer, Proxy Vote Distributor, Offline Asset Locator, Shadow Labor Unionist, Voiceprint Scrubber, Algorithmic Pacing Designer, Heat Signature Analyst, Code Tattoo Artist, Black Budget Operator, Memory Firewall Installer, Instant Justice Agent, Scent Simulation Technician, Entropy Stabilizer, Code Entanglement Specialist, Gray Zone Trade Broker, Virtual Heist Planner, Self-Destruct Circuit Inspector, Signal Echo Mapper, Disruptive Presence Coach, Neural Leak Patch Technician, Stream Reroute Operator, Synthetic Food Designer, Spatial Integrity Monitor, Public Sentiment Tracker, Loyalty Chip Installer, Fake News Architect, Emotion Obfuscation Designer, Adaptive Persona Coder, Context Collapse Analyst, Urban Myth Curator, Ghost Comm Specialist, Trace Erasure Operative, Info Combat Trainer, Botnet Integrator, [ENCRYPTED]";
+        const dataBiasesList = "High Political / Low Retail, Entertainment-Heavy, Tech-Centric Query Loop, Low Interaction / High Consumption, Satirical Lean, Conspiracy-Adaptive, Spiritual Wellness Bias, Crypto-Finance Overload, Search Engine Monogamy, Visual Media Preference, Audio-Centric Browsing, Doomscrolling Addict, Shopping Avoidant, Algorithm Loyalist, Cross-Platform Lurker, Reaction Feed Engaged, Speculative Query Pattern, Scientific Inquiry Clustered, Productivity App Dependent, Relationship-Oriented Queries, Late-Night Activity Spike, Emotional Trigger Responsive, Self-Help Pattern Flagged, News Aggregator Devoted, Identity Exploration Phase, Fringe Forum Access Detected, Tab Overload Detected, High Bounce Rate, Predictable Scroll Path, Privacy-Centric Surfing, Meme Cycle Addict, Political Polarity: Left, Political Polarity: Right, Libertarian Lean Detected, Surveillance Paranoia Pattern, Mental Health Topic Cluster, Conspiracy Entanglement Risk, Echo Chamber Reinforcement, Religious Query Bias: Christian, Religious Query Bias: Esoteric, NSFW Escalation Pattern, AI Curiosity Spikes, Fashion Loop Engagement, Frequent TOS Violations, Minimal Content Creation, Aggressive Comment History, Censorship Sensitivity Pattern, Data Hoarder Tendencies, Mobile-First Query Behavior, Keyboard Minimalist, Content Obsession Index: High, Authority Resistance Behavior, Repetition Loop: Cooking, Fitness Obsession Detected, Parental Content Filters: Disabled, Neurodivergence Topic Cluster, Gender Identity Focus, Minimalist Lifestyle Pattern, Cybersecurity Focused Search, DIY Learning Pattern, Corporate Structure Curiosity, Fringe Economy Interest, Travel Inspiration Focus, Food Obsession: Street Style, Escapism Loop: Fantasy, Mental Health Algorithm Triggered, Social Engineering Curiosity, Privacy Tools Query History, Digital Nomad Queries, Content Creation Software Bias, Real-Time News Obsession, Social Media Detox Searches, NFT/Blockchain Trend Focus, Self-Quantification Behavior, Psychedelic Curiosity Cluster, Mindfulness & Meditation Priority, Military Industrial Complex Interest, Urban Farming Exploration, Survivalist Tendencies, Law Enforcement Protocol Interest, Cancel Culture Keywords, Cancel Culture Avoidance, Empathy-Driven Queries, Hype-Driven Consumption Pattern, Indie Art Discovery Trend, Counterculture Search Behavior, Academic Research Habits, Classified Files Curiosity, Deep Web Interest Spike, Time Management Strategy Bias, Foreign Policy Focus, Education System Scrutiny, Tech Ethics Pattern, Neural Link Curiosity, Hyperlink Traversal Habit, Bot Interaction Density: High, Job Market Tracking Loop, Geo-Political Anomaly Detection, Urban Planning Curiosity, Psychological Warfare Keywords, True Crime Saturation, Astrology & Occult Obsession, Energy Healing Research, High-Frequency Stock Tracking, Ghost Tech Enthusiasm, Gamification Query Bias, Freelance Economy Loop, Gig Culture Patterns, Transhumanism Interest Spikes, Biohacking Curiosity, Predictive Modeling Queries, Search Depth: 12+ Layers, Link Avoidant Behavior, Native App Preference, VR/AR Tech Curiosity, Censorship Tool Usage, Offline Query Buffering, Dark UX Interest Spike, Zero-Knowledge Proof Research, Ethics of Automation Pattern, Content Saturation Limit Exceeded, Passive Watch Behavior, Active Share Profile, Social Currency Chasing, Signal vs. Noise Confusion, Political Extremism Risk, Content Credibility Doubt, Sensationalism Bias, Wellness Consumer Loop, Economic Inequality Focus, Data Privacy Legal Focus, Targeted Ads Resistance, Community-Driven Content Consumption, Fan Theory Overengagement, Parody Misclassification Risk, Visual Misinformation Blindspot, Algorithm Obedience Detected, Click Path Redundancy, Context Switching Delay, Cognitive Bias Reinforcement, Multilingual Query Drift, Digital Burnout Risk, Predictability Score: High, Exploratory Behavior Suppressed, Authority Trust Score: Low, Public Policy Tracking, Global Crisis Monitoring, Academic Source Preference, Infotainment Loop Bias, Hyper-Relevant Feed Pattern, Recommendation Cycle Repetition, Keyword Density: Belief-Driven, Propaganda Identification Pattern, Content Skimming Flag, Tactical Resource Focus, Social Justice Alignment, Anarchist Thought Pattern, Eco-Activism Signal, Nationalist Symbol Detection, Humor-Driven Engagement, Chronically Online Profile, Gamified Economy Curiosity, Data-Driven Identity Formation, Self-Surveillance Acceptance, Marginalized Voice Amplification, Government Funding Queries, Mental Health App Overlap, Low Political Literacy, Subcultural Vocabulary Match, Brand Avoidance Pattern, User-Agent Spoofing Detected, Query Window Clustering, Hyperlink Chaining Behavior, Behaviorally Tracked Awareness, Linguistic Bias Detected, FOMO-Driven Search Activity, Lifestyle Simulation Interest, Shadow Banning Anxiety Pattern, High Keyword Retention, Low Keyword Clarity, Language Complexity: Elevated, Political Disassociation, Anti-Commercialism Pattern, Infinite Scroll Dependency, Influencer Tracking Pattern, Risk Aversion Tendency, In-Group Language Preference, Paranoia Query Clustering, Accelerated Search Behavior, Low Query Diversity, Unusual Device-Content Ratio, Sensory Content Seeking, Neuro-Aesthetic Preference, Cultural Artifact Curiosity, AI Alignment Research, Bias Correction History, Fringe Science Pattern, Government Black Budget Interest, Avatar-Based Identity Interest, Quantum Computing, Deep Web Curiosity, Immoral Deviancy";
+        const assetIndexesList = "Low Income / High Debt, Untraceable Funds, Digitally Unbanked, Modest Holdings / Stable, Luxury Asset Owner, Inherited Wealth, Negative Equity, High Credit Risk, Crypto-Forward Portfolio, Encrypted Wealth Node, Microtransaction Dependency, Physical Asset Hoarder, Disposable Income - Minimal, Synthetic Credit Score, No Formal Bank Ties, Debt-Repackaged Debtor, Freelance-Earned Capital, Off-Ledger Savings, High Volatility Holdings, Disposable Lifestyle Pattern, Reputation-Coin Funded, Barter Economy Participant, Subscription-Heavy Spending, Dark Wallet Verified, Government Subsidized, AI-Traded Assets, NFT-Backed Equity, Shadow Credit Operative, Deferred Wealth Collector, Asset-Light Model, Identity-Linked Holdings, Minimalist Financial Footprint, High-Liquidity Threshold, Smart Contract Dependent, Risk-Averse Investment Pattern, Legal Status: Frozen Funds, Gamified Asset Builder, Universal Income Tier, Gig Economy Loop, Generational Debt Carrier, Trustless Portfolio Builder, Peer-to-Peer Loan Holder, Multi-Currency Strategist, Non-Tangible Asset Collector, Financial Profile Obfuscated, Income Stream Fragmented, Smart Wallet Synced, Anonymous Escrow User, Community-Led Credit Model, Predictive Income Risk, Low ROI Lifestyle, Black Market Holdings, Stablecoin Majority Assets, Micro-Savings Protocol User, Decentralized Bank Member, Net Worth Below Urban Median, Financial Privilege: High, Asset Flow: Stagnant, Burn Rate: Aggressive, Hidden Holdings Detected, Secondary Market Investor, Credit Rating: Suppressed, High Transaction Frequency, Consumption-Based Budget, Ghost Fund Transfers, AI-Managed Wealth Profile, Digital Slush Account, Monetized Data Asset Holder, Investment Delay Pattern, Influence-Based Income, Alt-Economy Participant, Offshore Funds Suspicion, Borrow-to-Invest Cycle, Subscription Leakage Detected, Urban Real Estate Stakeholder, Deferred Payout Beneficiary, Non-Fiat Liquid Holdings, Data Monetization Dependent, Invisible Income Stream, Dark Pool Trade Participant, High-Trust Trading Ring, Below-Grid Asset Trail, Financial Shadow Tier, Tokenized Equity Owner, Lifestyle Surplus Pattern, Risk-Layered Debt Structure, Data-Rent Economy User, Passive Credit Builder, Algorithmic Pension System, Invisible Labor Contributor, Flash Trading Habit, Synthetic Asset Manager, Tax Avoidance Pattern, Transaction Velocity: High, Class-4 Expense Tier, Loyalty Points Reliant, Value-Drift Exposure, Compromised Wealth Profile, Corporate Subsidy Recipient, Emergency-Only Reserves, Influencer Endorsement-Based Earnings, Digital Economy Tethered";
+        
+        const vocations = vocationsList.split(',').map(item => item.trim());
+        const dataBiases = dataBiasesList.split(',').map(item => item.trim());
+        const assetIndexes = assetIndexesList.split(',').map(item => item.trim());
+        const viceProfiles = ["Synth-Alcoholism", "Black Market Implants", "Adrenaline Junkie", "Information Hoarder", "Sim-Sense Addiction", "Unregulated Stim Use", "Ritualistic Behavior", "Pathological Liar", "Kleptomania", "Corporate Espionage", "Fugue States"];
+
+        async function startVideo() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("Error accessing camera: ", err);
+                loadingText.innerText = 'ERROR: CAMERA ACCESS DENIED';
+            }
+        }
+
+        async function loadModels() {
+            loadingText.innerText = 'Loading Neural Models...';
+            const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js/weights';
+            try {
+                await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+                loadingText.innerText = 'Models Loaded. Starting Camera...';
+                await startVideo();
+            } catch (error) {
+                console.error("Failed to load models:", error);
+                loadingText.innerText = 'ERROR: FAILED TO LOAD MODELS';
+            }
+        }
+
+        function drawLoop() {
+            if (!video || video.paused || video.ended) {
+                requestAnimationFrame(drawLoop);
+                return;
+            }
+
+            const displaySize = { width: video.offsetWidth, height: video.offsetHeight };
+            if (canvas.width !== displaySize.width || canvas.height !== displaySize.height) {
+                faceapi.matchDimensions(canvas, displaySize);
+            }
+            
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const currentTrackingState = latestDetections.length > 0 ? 'ACTIVE' : 'INACTIVE';
+
+            if (currentTrackingState === 'ACTIVE') {
+                if(trackingStatus.innerText !== 'ACTIVE') {
+                    trackingStatus.innerText = 'ACTIVE';
+                    trackingStatus.classList.remove('text-red-500');
+                    trackingStatus.classList.add('text-teal-400');
+                }
+                
+                const resizedDetections = faceapi.resizeResults(latestDetections, displaySize);
+                const currentTime = Date.now();
+                const pulse = (Math.sin(currentTime / 300) + 1) / 2; 
+
+                resizedDetections.forEach(detection => {
+                    const box = detection.box; 
+                    
+                    ctx.save();
+                    ctx.globalAlpha = 0.7 + pulse * 0.3;
+                    ctx.strokeStyle = '#00e5e5';
+                    ctx.lineWidth = 1.5 + pulse * 1.5;
+                    ctx.setLineDash([5, 5]);
+                    ctx.shadowBlur = 15 + pulse * 10;
+                    ctx.shadowColor = '#00e5e5';
+                    ctx.strokeRect(box.x, box.y, box.width, box.height);
+                    ctx.restore();
+
+                    const angle = (Math.floor(currentTime / 1000) % 8) * (Math.PI / 4);
+                    const centerX = box.x + box.width / 2;
+                    const centerY = box.y + box.height / 2;
+                    
+                    ctx.save();
+                    ctx.globalAlpha = 0.6;
+                    ctx.strokeStyle = '#ff0000';
+                    ctx.lineWidth = 2;
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = '#ff0000';
+                    ctx.setLineDash([3, 3]);
+                    ctx.translate(centerX, centerY);
+                    ctx.rotate(angle);
+                    ctx.translate(-centerX, -centerY);
+                    ctx.strokeRect(box.x - 5, box.y - 5, box.width + 10, box.height + 10);
+                    ctx.restore();
+                });
+            } else {
+                 if(trackingStatus.innerText !== 'INACTIVE') {
+                    trackingStatus.innerText = 'INACTIVE';
+                    trackingStatus.classList.remove('text-teal-400');
+                    trackingStatus.classList.add('text-red-500');
+                 }
+            }
+            
+            if (currentTrackingState === 'INACTIVE' && lastTrackingState === 'ACTIVE') {
+                clearTargetData();
+            } else if (currentTrackingState === 'ACTIVE' && lastTrackingState === 'INACTIVE') {
+                generateNewTargetData();
+            }
+            lastTrackingState = currentTrackingState;
+
+            requestAnimationFrame(drawLoop);
+        }
+
+        async function runDetection() {
+            if (video.readyState >= 3) {
+                latestDetections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions());
+            }
+        }
+        
+        function clearTargetData() {
+            const vocationEl = document.getElementById('vocation-text');
+            vocationEl.innerText = 'N/A';
+            document.getElementById('asset-text').innerText = 'N/A';
+            document.getElementById('bias-text').innerText = 'N/A';
+            document.getElementById('vice-text').innerText = 'N/A';
+            vocationEl.classList.remove('text-red-500');
+        }
+
+        function generateNewTargetData() {
+            const vocationEl = document.getElementById('vocation-text');
+            const assetEl = document.getElementById('asset-text');
+            const biasEl = document.getElementById('bias-text');
+            const viceEl = document.getElementById('vice-text');
+
+            vocationEl.classList.remove('text-red-500');
+            let selectedVocation = vocations[Math.floor(Math.random() * vocations.length)];
+            if (selectedVocation === '[ENCRYPTED]' || selectedVocation === '[CLASSIFIED]') {
+                animateText(vocationEl, selectedVocation);
+                vocationEl.classList.add('text-red-500');
+            } else {
+                animateText(vocationEl, selectedVocation.toUpperCase());
+            }
+
+            animateText(assetEl, assetIndexes[Math.floor(Math.random() * assetIndexes.length)].toUpperCase());
+            animateText(biasEl, dataBiases[Math.floor(Math.random() * dataBiases.length)].toUpperCase());
+            animateText(viceEl, viceProfiles[Math.floor(Math.random() * viceProfiles.length)].toUpperCase());
+        }
+
+        function createRipple(event) {
+            const button = event.currentTarget;
+            const ripple = document.createElement("div");
+            const rect = button.getBoundingClientRect();
+            
+            const clientX = event.touches ? event.touches[0].clientX : event.clientX;
+            const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+
+            ripple.className = "ripple";
+            document.body.appendChild(ripple);
+            
+            ripple.style.left = `${clientX || rect.left + rect.width / 2}px`;
+            ripple.style.top = `${clientY || rect.top + rect.height / 2}px`;
+            ripple.style.width = ripple.style.height = `${Math.max(rect.width, rect.height)}px`;
+
+            ripple.onanimationend = () => {
+                ripple.remove();
+            };
+        }
+
+        function setupGlyphs() {
+            const glyphPaths = [
+                "M4 16 C4 22 10 28 16 28 22 28 28 22 28 16 28 10 22 4 16 4 L16 16 Z",
+                "M4 4 L28 28 M28 4 L4 28 M16 4 L16 28"
+            ];
+
+            glyphPaths.forEach(pathData => {
+                const container = document.createElement('div');
+                container.className = 'glyph-container hud-element';
+                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                svg.setAttribute('class', 'w-6 h-6 hud-text');
+                svg.setAttribute('viewBox', '0 0 32 32');
+                svg.setAttribute('fill', 'none');
+                svg.setAttribute('stroke', 'currentColor');
+                svg.setAttribute('stroke-width', '2');
+                svg.setAttribute('stroke-linecap', 'round');
+                svg.setAttribute('stroke-linejoin', 'round');
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                path.setAttribute('d', pathData);
+                svg.appendChild(path);
+                container.appendChild(svg);
+                rightGlyphBar.appendChild(container);
+
+                const press = (e) => {
+                    container.classList.add('pressed');
+                    createRipple(e);
+                };
+                const release = () => container.classList.remove('pressed');
+
+                container.addEventListener('mousedown', press);
+                container.addEventListener('mouseup', release);
+                container.addEventListener('mouseleave', release);
+                container.addEventListener('touchstart', (e) => { e.preventDefault(); press(e); }, { passive: false });
+                container.addEventListener('touchend', (e) => { e.preventDefault(); release(e); });
+            });
+        }
+
+        function animateText(element, final_text) {
+            let iteration = 0;
+            const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789*#$@!%&";
+            const interval = setInterval(() => {
+                element.innerText = final_text
+                    .split("")
+                    .map((letter, index) => {
+                        if(index < iteration) {
+                            return final_text[index];
+                        }
+                        return chars[Math.floor(Math.random() * chars.length)];
+                    })
+                    .join("");
+                
+                if(iteration >= final_text.length){
+                    clearInterval(interval);
+                }
+                
+                iteration += 1 / 2;
+            }, 40);
+        }
+
+        video.addEventListener('play', () => {
+            loadingOverlay.style.opacity = '0';
+            uiOverlay.style.opacity = '1';
+            setTimeout(() => loadingOverlay.style.display = 'none', 500);
+
+            setTimeout(() => {
+                bottomUiContainer.classList.remove('opacity-0', 'translate-y-4');
+                clearTargetData();
+            }, 200);
+
+            setInterval(runDetection, 200);
+            requestAnimationFrame(drawLoop);
+        });
+
+        triggerExploitBtn.addEventListener('mousedown', (e) => createRipple(e));
+        triggerExploitBtn.addEventListener('touchstart', (e) => { e.preventDefault(); createRipple(e); }, { passive: false });
+
+        skipTraceBtn.addEventListener('mousedown', (e) => createRipple(e));
+        skipTraceBtn.addEventListener('touchstart', (e) => { e.preventDefault(); createRipple(e); }, { passive: false });
+
+        setupGlyphs();
+        loadModels();
+    </script>
+
+</body>
+</html>
